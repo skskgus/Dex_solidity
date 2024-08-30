@@ -29,9 +29,9 @@ contract Dex {
         totalSupply -= amount;
     }
 
-    function _update(uint256 balance0, uint256 balance1) internal {
-        reserve0 = balance0;
-        reserve1 = balance1;
+    function _update() internal {
+        reserve0 = token0.balanceOf(address(this));
+        reserve1 = token1.balanceOf(address(this));
     }
 
     function _sqrt(uint y) internal pure returns (uint z) {
@@ -51,69 +51,43 @@ contract Dex {
         return x <= y ? x : y;
     }
 
-    function addLiquidity(uint256 _amount0, uint256 _amount1, uint256 minShares)
-        external
-        returns (uint256 shares)
-    {
+    function addLiquidity(uint256 _amount0, uint256 _amount1, uint256 minShares) external returns (uint256 shares) {
+        _update();
+
         uint256 _reserve0 = reserve0;
         uint256 _reserve1 = reserve1;
 
-        if (_reserve0 > 0 || _reserve1 > 0) {
-            uint256 optimalAmount1 = (_amount0 * _reserve1) / _reserve0;
-            if (_amount1 > optimalAmount1) {
-                _amount1 = optimalAmount1;
-            } else {
-                uint256 optimalAmount0 = (_amount1 * _reserve0) / _reserve1;
-                require(optimalAmount0 <= _amount0, "x / y != dx / dy");
-                _amount0 = optimalAmount0;
-            }
-        }
+        require(token0.allowance(msg.sender, address(this)) >= _amount0, "ERC20: insufficient allowance");
+        require(token1.allowance(msg.sender, address(this)) >= _amount1, "ERC20: insufficient allowance");
 
-        require(
-            token0.allowance(msg.sender, address(this)) >= _amount0,
-            "ERC20: insufficient allowance"
-        );
-        require(
-            token1.allowance(msg.sender, address(this)) >= _amount1,
-            "ERC20: insufficient allowance"
-        );
-
-        require(
-            token0.balanceOf(msg.sender) >= _amount0,
-            "ERC20: transfer amount exceeds balance"
-        );
-        require(
-            token1.balanceOf(msg.sender) >= _amount1,
-            "ERC20: transfer amount exceeds balance"
-        );
-
-        token0.transferFrom(msg.sender, address(this), _amount0);
-        token1.transferFrom(msg.sender, address(this), _amount1);
+        require(token0.balanceOf(msg.sender) >= _amount0, "ERC20: transfer amount exceeds balance");
+        require(token1.balanceOf(msg.sender) >= _amount1, "ERC20: transfer amount exceeds balance");
 
         if (totalSupply == 0) {
             shares = _sqrt(_amount0 * _amount1);
         } else {
-            shares = _min(
-                (_amount0 * totalSupply) / _reserve0,
-                (_amount1 * totalSupply) / _reserve1
-            );
+            uint256 optimalAmount1 = (_amount0 * _reserve1) / _reserve0;
+            if (_amount1 > optimalAmount1) {
+                _amount1 = optimalAmount1;
+            } else {
+                _amount0 = (_amount1 * _reserve0) / _reserve1;
+            }
+
+            shares = _min((_amount0 * totalSupply) / _reserve0, (_amount1 * totalSupply) / _reserve1);
         }
 
-        require(shares >= minShares, "shares < minShares");
         require(shares > 0, "shares = 0");
+        require(shares >= minShares, "shares < minShares");
+
+        token0.transferFrom(msg.sender, address(this), _amount0);
+        token1.transferFrom(msg.sender, address(this), _amount1);
 
         _mint(msg.sender, shares);
 
-        _update(
-            token0.balanceOf(address(this)),
-            token1.balanceOf(address(this))
-        );
+        _update();
     }
 
-    function removeLiquidity(uint256 shares, uint256 minAmount0, uint256 minAmount1)
-        external
-        returns (uint256 amount0, uint256 amount1)
-    {
+    function removeLiquidity(uint256 shares, uint256 minAmount0, uint256 minAmount1) external returns (uint256 amount0, uint256 amount1) {
         uint256 _reserve0 = reserve0;
         uint256 _reserve1 = reserve1;
         uint256 _totalSupply = totalSupply;
@@ -126,16 +100,15 @@ contract Dex {
 
         _burn(msg.sender, shares);
 
-        _update(_reserve0 - amount0, _reserve1 - amount1);
+        _update();
 
         token0.transfer(msg.sender, amount0);
         token1.transfer(msg.sender, amount1);
+
+        _update();
     }
 
-    function swap(uint256 amount0Out, uint256 amount1Out, uint256 minOutput)
-        external
-        returns (uint256 amountOut)
-    {
+    function swap(uint256 amount0Out, uint256 amount1Out, uint256 minOutput) external returns (uint256 amountOut) {
         require(amount0Out == 0 || amount1Out == 0, "Invalid input");
 
         bool isToken0 = amount1Out == 0;
@@ -145,23 +118,19 @@ contract Dex {
 
         uint256 amountIn = isToken0 ? amount0Out : amount1Out;
 
+        uint256 balanceBefore = tokenIn.balanceOf(address(this));
+
         tokenIn.transferFrom(msg.sender, address(this), amountIn);
 
-        uint256 amountInWithFee = (amountIn * 999) / 1000;
+        uint256 actualAmountIn = tokenIn.balanceOf(address(this)) - balanceBefore;
+
+        uint256 amountInWithFee = (actualAmountIn * 999) / 1000;
         amountOut = (reserveOut * amountInWithFee) / (reserveIn + amountInWithFee);
 
         require(amountOut >= minOutput, "Insufficient output amount");
 
         tokenOut.transfer(msg.sender, amountOut);
 
-        if (isToken0) {
-            reserve0 += amountIn;
-            reserve1 -= amountOut;
-        } else {
-            reserve1 += amountIn;
-            reserve0 -= amountOut;
-        }
-
-        _update(reserve0, reserve1);
+        _update();
     }
 }
